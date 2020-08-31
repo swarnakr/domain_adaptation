@@ -1,0 +1,151 @@
+
+'''*************************************************************************
+	> File Name: spacenet.py
+	> Author: yuansong
+	> Mail: yuansongwx@outlook.com
+	> Created Time: Mon 21 Oct 2019 04:01:05 PM EDT
+ ************************************************************************'''
+import os
+import numpy as np
+import scipy.misc as m
+import cv2
+from torch.utils import data
+from torchvision import transforms
+import data.custom_transforms as tr
+import json
+from PIL import Image
+import pdb
+import torch
+
+class Spacenet(data.Dataset):
+    NUM_CLASSES = 2
+
+    def __init__(self, city='Shanghai', split='train', img_root='/usr/xtmp/satellite/spacenet/', gt_root='/usr/xtmp/satellite/spacenet/', mean_std=((0., 0., 0.), (1., 1., 1.)), if_augment=0, repeat_count=1, sample_number= 100000, transform_sample=1):
+        self.img_root = img_root
+        self.gt_root = gt_root
+        self.name_root = '/home/home1/swarnakr/scriptln/DA/domains/' + city; #'/home/home1/xw176/work/Domain_Adaptation/dataset/spacenet/domains/' + city
+        #with open(os.path.join(self.name_root, split + '.json')) as f:
+        #    self.files = json.load(f)
+
+        if if_augment:
+            add_string1='_transformed'
+            add_string2 = ''
+        else:
+            add_string1=''
+            add_string2='_RGB.tif'
+            
+        load_path = os.path.join(self.name_root, '{}{}.json'.format(split,add_string1))
+        with open(load_path) as f:
+            self.files = json.load(f)
+
+        #self.files = [ff+'_out_{}.png'.format(i+1) for i in range(repeat_count) for ff in self.files]
+        #pdb.set_trace()
+        if 1:
+            sample_number = np.minimum(len(self.files),sample_number)
+            select = np.random.choice(len(self.files),size=sample_number,replace=False)
+            temp = [self.files[ii] for ii in select]
+            self.files = temp
+        self.files = [ff + add_string2 for ff in self.files]
+            
+        self.split = split
+        self.classes = [0, 1]
+        self.class_names = ['bkg', 'building']
+        self.mean_std = mean_std
+        self.transform_sample = transform_sample
+
+        if not self.files:
+            raise Exception("No files for split=[%s] found in %s" % (split, self.images_base))
+
+#        pdb.set_trace()
+        print("Found %d %s images" % (len(self.files), split))
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, index):
+        ind = self.files[index].find('_')
+        file_replace = self.files[index][:ind]
+        
+        path = os.path.join(self.img_root, self.files[index])
+
+        #if not os.path.exists(path):
+        #    path = os.path.join(self.img_root, 'Shanghai3517_out_2.png')
+
+        img = Image.open(path).convert('RGB') 
+        target = Image.open(os.path.join(self.gt_root, file_replace + '_GT.tif')) #self.files[index] + '_GT.tif'))
+        sample = {'image': img, 'label': target, 'path':  self.files[index]}
+        
+        if self.transform_sample:
+            if self.split == 'train':
+                sample = self.transform_ts(sample)
+            elif self.split == 'val':
+                sample = self.transform_val(sample)
+            elif self.split == 'test':
+                sample = self.transform_ts(sample)
+        else:
+            img = img.resize((400,400), Image.BILINEAR)
+            img = torch.from_numpy(np.array(img)) #.float()
+            target = torch.from_numpy(np.array(target)) #.float()
+            sample = {'image': img, 'label': target}
+
+        sample['path'] =  self.files[index]
+        return sample
+                
+
+    def transform_tr(self, sample):
+        composed_transforms = transforms.Compose([
+            #tr.FixScaleCrop(400),
+            tr.RandomHorizontalFlip(),
+            tr.RandomVerticalFlip(),
+            tr.RandomRotate(180),
+            tr.RandomScaleCrop(base_size=400, crop_size=400, fill=0),
+            tr.RandomGaussianBlur(),
+            tr.Normalize(mean=self.mean_std[0], std=self.mean_std[1]),
+            tr.ToTensor(),
+        ])
+        
+        #print(self.mean_std)
+        return composed_transforms(sample)
+
+    def transform_val(self, sample):
+
+        composed_transforms = transforms.Compose([
+            tr.FixScaleCrop(400),
+            tr.Normalize(mean=self.mean_std[0], std=self.mean_std[1]),
+            tr.ToTensor()])
+
+        return composed_transforms(sample)
+
+    def transform_ts(self, sample):
+
+        composed_transforms = transforms.Compose([
+            tr.FixedResize(size=400),
+            tr.Normalize(mean=self.mean_std[0], std=self.mean_std[1]),  # tr.Normalize(),
+            tr.ToTensor()])
+
+        return composed_transforms(sample)
+
+if __name__ == "__main__":
+    from torch.utils.data import DataLoader
+    spacenet_train = Spacenet(img_root='/data/spacenet/')
+    dataloader = DataLoader(spacenet_train, batch_size=2, shuffle=True, num_workers=2)
+    #print(spacenet_train.__getitem__(0))
+    for ii, sample in enumerate(dataloader):
+        for jj in range(sample["image"].size()[0]):
+            img = sample['image'][jj].numpy()
+            gt = sample['label'][jj].numpy()
+            img = img.transpose(1,2,0)
+            gt = gt[:,:,None]
+            print(img.shape)
+            print(gt.shape)
+            gt_ = gt.repeat(3, axis=2)
+            show = np.hstack((img, gt_))
+            cv2.imshow('show', show[:,:,::-1])
+            c = chr(cv2.waitKey(0) & 0xff)
+            if c == 'q':
+                exit()
+
+
+
+
+
